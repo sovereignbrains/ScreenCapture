@@ -15,12 +15,14 @@
 
 ```powershell
 pip install pyinstaller pystray pillow numpy soundcard
-python -m PyInstaller --onefile --noconsole --icon icon.ico --name ScreenCapture capture.py
-Move-Item dist\ScreenCapture.exe .\ScreenCapture.exe -Force
+python -m PyInstaller --onedir --noconsole --icon icon.ico --name ScreenCapture capture.py
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-`ffmpeg.exe` в exe не зашит — он должен лежать рядом с ним (установщик кладёт его сам).
+`ffmpeg.exe` внутрь не зашит — он должен лежать рядом с exe (установщик кладёт его сам).
+Сборка только `--onedir`: в режиме `--onefile` приложение распаковывает себя в `%TEMP%\_MEI...`
+при каждом запуске и после обновления падает с `Failed to load Python DLL`.
+Установщик забирает всю папку `dist\ScreenCapture`.
 
 ## Релиз
 

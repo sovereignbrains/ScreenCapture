@@ -1,5 +1,5 @@
 #define MyAppName "ScreenCapture"
-#define MyAppVersion "1.1.4"
+#define MyAppVersion "1.2.0"
 #define MyAppExeName "ScreenCapture.exe"
 
 [Setup]
@@ -26,7 +26,7 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "desktopicon"; Description: "Создать значок на рабочем столе"; GroupDescription: "Дополнительно:"
 
 [Files]
-Source: "ScreenCapture.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\ScreenCapture\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
