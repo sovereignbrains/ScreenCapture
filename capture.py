@@ -23,7 +23,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 APP_NAME = "ScreenCapture"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 GITHUB_REPO = "sovereignbrains/ScreenCapture"
 FRAMERATE = "50"
 ENCODE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
@@ -542,18 +542,24 @@ def warm_up_ffmpeg():
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _wait_until_capturing(proc, path, timeout):
-    """Ждём, пока ffmpeg напишет первые байты, вместо фиксированной паузы. False — процесс умер."""
+FFMPEG_READY_MARK = "Press [q] to stop"
+
+
+def _wait_until_capturing(proc, log_offset, timeout=4.0):
+    """Ждём, пока ffmpeg сообщит о готовности (~0.35 с), вместо фиксированной паузы.
+    Размер выходного файла для этого не годится: заголовок mkv висит в буфере минутами."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if proc.poll() is not None:
-            return False
         try:
-            if os.path.getsize(path) > 0:
-                return True
+            with open(FFMPEG_LOG, encoding="utf-8", errors="replace") as f:
+                f.seek(log_offset)
+                if FFMPEG_READY_MARK in f.read():
+                    return True
         except OSError:
             pass
-        time.sleep(0.05)
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.03)
     return proc.poll() is None
 
 
@@ -627,6 +633,7 @@ def _mux(video_path, audio_path, final_path):
 
 
 def _start_recording(region):
+    started = time.time()
     os.makedirs(cfg["video_dir"], exist_ok=True)
     stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
     video_tmp = os.path.join(cfg["video_dir"], f".tmp_video_{stamp}.mkv")
@@ -639,10 +646,11 @@ def _start_recording(region):
 
     proc = _spawn(_ddagrab_cmd(video_tmp, region))
     backend = "D3D11"
-    if not _wait_until_capturing(proc, video_tmp, 2.0):
+    if not _wait_until_capturing(proc, 0):
+        fallback_offset = os.path.getsize(FFMPEG_LOG)
         proc = _spawn(_gdigrab_cmd(video_tmp, region))
         backend = "GDI"
-        if not _wait_until_capturing(proc, video_tmp, 2.0):
+        if not _wait_until_capturing(proc, fallback_offset):
             _close_err_files()
             tail = ""
             try:
@@ -661,7 +669,7 @@ def _start_recording(region):
     state["backend"] = backend
     state["audio"] = audio
     state["paths"] = (video_tmp, audio_tmp, final_path)
-    log(f"record started ({backend}) region={region}: {final_path}")
+    log(f"record started ({backend}) in {time.time() - started:.2f}s region={region}: {final_path}")
     notify(f"Запись пошла: {region[2]}x{region[3]}, 50 fps ({backend})")
     refresh_menu()
 
