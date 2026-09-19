@@ -23,7 +23,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 APP_NAME = "ScreenCapture"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 GITHUB_REPO = "sovereignbrains/ScreenCapture"
 FRAMERATE = "50"
 ENCODE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
@@ -522,6 +522,41 @@ def _spawn(cmd):
     )
 
 
+def warm_up_ffmpeg():
+    """Холодный запуск 222-мегабайтного ffmpeg.exe стоит несколько секунд (антивирус + чтение с диска).
+    Прогреваем его при старте, чтобы запись начиналась сразу по хоткею."""
+    def worker():
+        started = time.time()
+        try:
+            subprocess.run(
+                [FFMPEG, "-hide_banner", "-version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=60,
+            )
+            log(f"ffmpeg warmed up in {time.time() - started:.1f}s")
+        except Exception as e:
+            log(f"ffmpeg warm-up failed: {e}")
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _wait_until_capturing(proc, path, timeout):
+    """Ждём, пока ffmpeg напишет первые байты, вместо фиксированной паузы. False — процесс умер."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return False
+        try:
+            if os.path.getsize(path) > 0:
+                return True
+        except OSError:
+            pass
+        time.sleep(0.05)
+    return proc.poll() is None
+
+
 def _close_err_files():
     for err_file in state["err_files"]:
         try:
@@ -603,13 +638,11 @@ def _start_recording(region):
         pass
 
     proc = _spawn(_ddagrab_cmd(video_tmp, region))
-    time.sleep(0.8)
     backend = "D3D11"
-    if proc.poll() is not None:
+    if not _wait_until_capturing(proc, video_tmp, 2.0):
         proc = _spawn(_gdigrab_cmd(video_tmp, region))
-        time.sleep(0.5)
         backend = "GDI"
-        if proc.poll() is not None:
+        if not _wait_until_capturing(proc, video_tmp, 2.0):
             _close_err_files()
             tail = ""
             try:
@@ -1025,6 +1058,7 @@ def main():
         (cfg["record_hotkey"], toggle_recording),
     ])
     log(f"app started (v{APP_VERSION})")
+    warm_up_ffmpeg()
     threading.Timer(20.0, lambda: check_updates(manual=False)).start()
     icon.run()
 
