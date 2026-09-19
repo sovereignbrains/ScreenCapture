@@ -23,7 +23,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 APP_NAME = "ScreenCapture"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 GITHUB_REPO = "sovereignbrains/ScreenCapture"
 FRAMERATE = "50"
 ENCODE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
