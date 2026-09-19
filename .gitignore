@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+*.spec
+*.log
+ffmpeg.exe
+ScreenCapture.exe
+ScreenCapture-Setup.exe
