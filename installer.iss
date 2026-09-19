@@ -1,5 +1,5 @@
 #define MyAppName "ScreenCapture"
-#define MyAppVersion "1.1.2"
+#define MyAppVersion "1.1.3"
 #define MyAppExeName "ScreenCapture.exe"
 
 [Setup]
@@ -38,8 +38,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
-; При тихом обновлении ждём, пока установщик отпустит файлы: иначе распаковщик PyInstaller падает на Python DLL
-Filename: "{cmd}"; Parameters: "/C timeout /t 3 /nobreak >nul & start """" ""{app}\{#MyAppExeName}"""; Flags: nowait runhidden; Check: WizardSilent
+
 
 
 [Code]

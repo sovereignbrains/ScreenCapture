@@ -23,7 +23,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 APP_NAME = "ScreenCapture"
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 GITHUB_REPO = "sovereignbrains/ScreenCapture"
 FRAMERATE = "50"
 ENCODE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
@@ -899,10 +899,15 @@ def install_update(icon_=None, item=None):
         runner = os.path.join(tempfile.gettempdir(), f"{APP_NAME}-update.bat")
         try:
             with open(runner, "w", encoding="ascii") as f:
+                # Приложение поднимаем отсюда, дождавшись конца установки. Из [Run] установщика оно
+                # стартует в его контексте и загрузчик PyInstaller падает с ошибкой про Python DLL.
                 f.write(
                     "@echo off\r\n"
+                    'cd /d "%TEMP%"\r\n'
                     "timeout /t 3 /nobreak >nul\r\n"
                     f'"{target}" /SILENT /NORESTART\r\n'
+                    "timeout /t 2 /nobreak >nul\r\n"
+                    f'start "" "{get_exe_path()}"\r\n'
                     f'del "{target}"\r\n'
                     'del "%~f0"\r\n'
                 )
