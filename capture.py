@@ -43,6 +43,20 @@ DEFAULTS = {
 HOTKEY_LABELS = {"print screen": "PrtScn", "ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Win"}
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+FLASHW_STOP = 0
+FLASHW_TRAY = 2
+FLASHW_TIMER = 4
+
+
+class FLASHWINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("hwnd", wintypes.HWND),
+        ("dwFlags", wintypes.DWORD),
+        ("uCount", wintypes.UINT),
+        ("dwTimeout", wintypes.DWORD),
+    ]
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 kernel32.GlobalAlloc.restype = ctypes.c_void_p
@@ -385,7 +399,7 @@ def select_region(hint):
         return None
     try:
         vx, vy, vw, vh = virtual_screen()
-        shot = ImageGrab.grab(all_screens=True).convert("RGB")
+        shot = ImageGrab.grab(all_screens=True, include_layered_windows=True).convert("RGB")
         dimmed = shot.point(lambda p: p * 45 // 100)
 
         root = tk.Tk()
@@ -616,6 +630,60 @@ class AudioRecorder:
             self._thread.join(timeout=5)
 
 
+class RecIndicator:
+    """Индикатор активной записи: минимизированное окно в панели задач,
+    которое моргает (флешится) через FlashWindowEx, пока идёт запись."""
+
+    def __init__(self):
+        self._root = None
+        self._stop_evt = threading.Event()
+        self._thread = None
+        self._ready = threading.Event()
+
+    def start(self):
+        self._stop_evt.clear()
+        self._ready.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=2)
+
+    def _run(self):
+        root = tk.Tk()
+        self._root = root
+        root.title("Идёт запись экрана")
+        try:
+            root.iconbitmap(os.path.join(app_dir(), "icon.ico"))
+        except Exception:
+            pass
+        root.geometry("320x90")
+        tk.Label(root, text="Идёт запись экрана...", pady=18, font=("Segoe UI", 12)).pack()
+        root.protocol("WM_DELETE_WINDOW", root.iconify)
+        root.update_idletasks()
+        hwnd = root.winfo_id()
+        root.iconify()
+
+        info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, FLASHW_TRAY | FLASHW_TIMER, 0, 500)
+        user32.FlashWindowEx(ctypes.byref(info))
+        self._ready.set()
+
+        def check_stop():
+            if self._stop_evt.is_set():
+                stop_info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, FLASHW_STOP, 0, 0)
+                user32.FlashWindowEx(ctypes.byref(stop_info))
+                root.destroy()
+                return
+            root.after(200, check_stop)
+
+        root.after(0, check_stop)
+        root.mainloop()
+
+    def stop(self):
+        self._stop_evt.set()
+
+
+rec_indicator = RecIndicator()
+
+
 def _mux(video_path, audio_path, final_path):
     cmd = [
         FFMPEG, "-y",
@@ -624,6 +692,21 @@ def _mux(video_path, audio_path, final_path):
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "192k",
         "-shortest",
+        "-movflags", "+faststart",
+        final_path,
+    ]
+    result = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW
+    )
+    return result.returncode == 0
+
+
+def _remux(video_path, final_path):
+    cmd = [
+        FFMPEG, "-y",
+        "-i", video_path,
+        "-c:v", "copy",
+        "-movflags", "+faststart",
         final_path,
     ]
     result = subprocess.run(
@@ -638,7 +721,7 @@ def _start_recording(region):
     stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
     video_tmp = os.path.join(cfg["video_dir"], f".tmp_video_{stamp}.mkv")
     audio_tmp = os.path.join(cfg["video_dir"], f".tmp_audio_{stamp}.wav")
-    final_path = os.path.join(cfg["video_dir"], f"record_{stamp}.mkv")
+    final_path = os.path.join(cfg["video_dir"], f"record_{stamp}.mp4")
     try:
         open(FFMPEG_LOG, "w").close()
     except Exception:
@@ -664,6 +747,7 @@ def _start_recording(region):
 
     audio = AudioRecorder(audio_tmp)
     audio.start()
+    rec_indicator.start()
 
     state["proc"] = proc
     state["backend"] = backend
@@ -692,6 +776,7 @@ def _stop_recording():
 
     if audio is not None:
         audio.stop()
+    rec_indicator.stop()
 
     state["proc"] = None
     state["backend"] = None
@@ -700,9 +785,13 @@ def _stop_recording():
     refresh_menu()
 
     def finalize():
+        has_audio = False
         ok = False
         if audio is not None and audio.ok and os.path.exists(audio_tmp) and os.path.getsize(audio_tmp) > 44:
             ok = _mux(video_tmp, audio_tmp, final_path)
+            has_audio = ok
+        if not ok:
+            ok = _remux(video_tmp, final_path)
         if not ok:
             try:
                 os.replace(video_tmp, final_path)
@@ -713,8 +802,8 @@ def _stop_recording():
                 os.remove(tmp)
             except Exception:
                 pass
-        log(f"record finalized{'(with audio)' if ok else '(video only)'}: {final_path}")
-        notify(f"Запись сохранена{' со звуком' if ok else ' (без звука)'}:\n{os.path.basename(final_path)}")
+        log(f"record finalized{'(with audio)' if has_audio else '(video only)'}: {final_path}")
+        notify(f"Запись сохранена{' со звуком' if has_audio else ' (без звука)'}:\n{os.path.basename(final_path)}")
 
     threading.Thread(target=finalize, daemon=True).start()
 
