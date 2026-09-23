@@ -1,5 +1,5 @@
 #define MyAppName "ScreenCapture"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppExeName "ScreenCapture.exe"
 
 [Setup]
@@ -52,3 +52,4 @@ end;
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#MyAppExeName} /F"; Flags: runhidden; RunOnceId: "KillApp"
+Filename: "{cmd}"; Parameters: "/C schtasks /Delete /TN {#MyAppName} /F"; Flags: runhidden; RunOnceId: "DeleteAutostartTask"

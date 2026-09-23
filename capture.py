@@ -23,7 +23,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 APP_NAME = "ScreenCapture"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 GITHUB_REPO = "sovereignbrains/ScreenCapture"
 FRAMERATE = "50"
 ENCODE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
@@ -1026,6 +1026,7 @@ def install_update(icon_=None, item=None):
 
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+TASK_NAME = APP_NAME
 
 
 def get_exe_path():
@@ -1034,30 +1035,84 @@ def get_exe_path():
     return os.path.abspath(__file__)
 
 
-def is_autostart_enabled():
+def is_admin():
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
-            value, _ = winreg.QueryValueEx(key, APP_NAME)
-        return os.path.normcase(value.strip('"')) == os.path.normcase(get_exe_path())
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
+
+
+def relaunch_as_admin():
+    # RegisterHotKey's WM_HOTKEY is silently dropped by UIPI while an elevated window has focus -
+    # only a same-or-higher integrity listener keeps receiving it, which is why PrtScn falls
+    # through to Windows' own full-screen capture whenever an elevated app (the SSH client, an
+    # installer, ...) is in front. Running elevated ourselves is the fix.
+    try:
+        exe = sys.executable
+        params = "" if getattr(sys, "frozen", False) else f'"{os.path.abspath(__file__)}"'
+        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+        return result > 32
+    except Exception as e:
+        log(f"self-elevate failed: {e}")
+        return False
+
+
+def is_autostart_enabled():
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", TASK_NAME],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _create_autostart_task():
+    subprocess.run(
+        ["schtasks", "/Create", "/TN", TASK_NAME, "/TR", f'"{get_exe_path()}"',
+         "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"],
+        check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+    )
 
 
 def toggle_autostart(icon_=None, item=None):
     try:
         enable = not is_autostart_enabled()
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-            if enable:
-                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{get_exe_path()}"')
-            else:
-                try:
-                    winreg.DeleteValue(key, APP_NAME)
-                except FileNotFoundError:
-                    pass
+        if enable:
+            _create_autostart_task()
+        else:
+            subprocess.run(
+                ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
+                check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
         log(f"autostart set to {enable}")
     except Exception as e:
         log(f"autostart toggle failed: {e}")
     refresh_menu()
+
+
+def migrate_autostart():
+    # Autostart used to be a plain registry Run entry, launching the app unelevated - which would
+    # then lose the race for RegisterHotKey delivery against any elevated app already up at logon.
+    # Replace it with an elevated scheduled task once, silently, preserving the on/off state.
+    had_old = False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_ALL_ACCESS) as key:
+            try:
+                winreg.QueryValueEx(key, APP_NAME)
+                had_old = True
+                winreg.DeleteValue(key, APP_NAME)
+            except FileNotFoundError:
+                pass
+    except Exception:
+        pass
+    if had_old and not is_autostart_enabled():
+        try:
+            _create_autostart_task()
+            log("autostart migrated from registry Run key to scheduled task")
+        except Exception as e:
+            log(f"autostart migration failed: {e}")
 
 
 def open_dir(path):
@@ -1139,6 +1194,12 @@ def short_path(path, limit=52):
 
 
 def main():
+    if not is_admin():
+        if relaunch_as_admin():
+            return
+        log("continuing without elevation (UAC declined or unavailable) - PrtScn may lose to "
+            "Windows' own full-screen capture while an elevated window has focus")
+
     kernel32.CreateMutexW(None, False, "Local\\ScreenCaptureTrayApp")
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         return
@@ -1154,6 +1215,8 @@ def main():
 
     global icon
     load_config()
+    if is_admin():
+        migrate_autostart()
     icon = pystray.Icon(APP_NAME, make_icon_image(False), APP_NAME, build_menu())
     hotkeys.start([
         (cfg["screenshot_hotkey"], take_screenshot),
